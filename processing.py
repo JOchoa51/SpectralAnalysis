@@ -389,7 +389,7 @@ def plot_windows(data, window_length, dt, name):
     return fig
 
 
-def plot_signal_windowed(north, vertical, east, dt, window_type, name):
+def plot_signal_windowed(north, vertical, east, dt, name, window_type='boxcar'):
     n = len(north[0])
     maxvalue = np.max(np.maximum(np.abs(north), np.abs(east)))*1.2
     # minvalue = np.min(np.minimum(north, east))*1.2
@@ -439,7 +439,7 @@ def plot_signal_windowed(north, vertical, east, dt, window_type, name):
     return fig
 
 
-def rhs_spectrum(north, vertical, east, dt):
+def rhs_spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
     """Calculates the right-hand-side amplitude spectrum of the signal
 
     Args
@@ -447,39 +447,69 @@ def rhs_spectrum(north, vertical, east, dt):
         north (ndarray): North-component signal
         vertical (ndarray): Vertical-component signal
         east (ndarray): East-component signal
+        dt (float): time precision
+        fmin (float): minimum frequency to calculate the FFT from. Defaults to 0.1 Hz
+        fmax (float): maximum frequency to calculate the FFT from. Defaults to 50 Hz
 
     Returns
     -------
         tuple: Tuple that contains the north, vertical and east amplitude spectrums
-    """
-    n = len(north[0])  # longitud de cada seccion
-    freq = rfftfreq(n, dt)
-    fftnorth = [rfft(no)/(n/2) for no in north]
-    ffteast = [rfft(e)/(n/2) for e in east]
-    fftvertical = [rfft(v)/(n/2) for v in vertical]
 
-    fftnorth = np.array([np.abs(i) for i in fftnorth])
-    fftvertical = np.array([np.abs(j) for j in fftvertical])
-    ffteast = np.array([np.abs(k) for k in ffteast])
+    Changelog
+    ---------
+    - 09/SEP/2023: \n
+        --> Changed lists comprehensions to np.apply_along_axis() function for simplicity and performance.\n
+        --> Added code to crop the FFT and frequency arrays to the specified fmin and fmax
+    """
+    N = len(north[0])  # longitud de cada seccion
+    freq = rfftfreq(N, dt)
+
+    # Cálculo y normalización de los espectros de Fourier
+    fftnorth = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=north)
+    fftvertical = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=vertical)
+    ffteast = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=east)
+
+
+    # Encuentra el índice del elemento más cercano a fmin y fmax
+    fmin_loc = np.abs(freq-fmin)
+    fmin_loc = np.argmin(fmin_loc)
+    fmax_loc = np.abs(freq-fmax)
+    fmax_loc = np.argmin(fmax_loc)
+
+    # # Corta el vector de frecuencias desde fmin hasta fmax
+    freq = freq[fmin_loc:fmax_loc]
+    north = np.array(np.split(north, [fmin_loc, fmax_loc], axis=-1)[1])
+    vertical = np.array(np.split(vertical, [fmin_loc, fmax_loc], axis=-1)[1])
+    east = np.array(np.split(east, [fmin_loc, fmax_loc], axis=-1)[1])
 
     return fftnorth, fftvertical, ffteast, freq
 
 
-def plot_fft(north, vertical, east, freq, name, xmin, xmax):
+def plot_fft(north, vertical, east, freq, name, fmin, fmax):
     """Plots the FFT spectrum 
 
         Args
         ----
-            north (ndarray): North-component signal
-            vertical (ndarray): Vertical-component signal
-            east (ndarray): East-component signal
-            freq (ndarray): Frequency vector 
-            name (string): name of the file
+            - north (ndarray): North-component signal
+            - vertical (ndarray): Vertical-component signal
+            - east (ndarray): East-component signal
+            - freq (ndarray): Frequency vector 
+            - name (string): name of the file
+
+        Changelog
+        ---------
+        - 08/SEP/2023:\n
+            --> Corte del vector de frecuencias a los límites establecidos\n
+            --> Corte de los vectores de datos a los límites establecidos
+        - 09/SEP/2023: \n
+            --> Removed the vector cropping function and moved it to the rhs_spectrum one
     """
 
+    # Calcula el promedio de las ventanas
     n_mean = np.mean(north, axis=0)
     v_mean = np.mean(vertical, axis=0)
     e_mean = np.mean(east, axis=0)
+
     nombre = os.path.basename(name)[:4]
 
     plt.semilogx(freq, v_mean, color='r', label='Z', lw=1)
@@ -490,7 +520,7 @@ def plot_fft(north, vertical, east, freq, name, xmin, xmax):
     plt.title(f'{nombre} - FFT', fontsize=15)
     plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
     plt.ylabel('Power Spectral Density [(counts)^2/Hz]', fontsize=12, labelpad=10)
-    plt.xlim(xmin, xmax)
+    plt.xlim(fmin, fmax)
     plt.grid(ls='--', which='both')
     plt.legend()
     plt.tick_params('both', labelsize=12)
@@ -555,9 +585,7 @@ def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth):
     count = 0
     s = perf_counter()  # Cuenta el tiempo de ejecución del ciclo
     for i, j, k in zip(fftnorth, fftvertical, ffteast):
-        count += 1
-
-        # WITH PYKOOH
+        # WITH PYKOOH (better performance than Obspy)
         north_smooth.append(pykooh.smooth(freq, freq, i, b=bandwidth))
         vertical_smooth.append(pykooh.smooth(freq, freq, j, b=bandwidth))
         east_smooth.append(pykooh.smooth(freq, freq, k, b=bandwidth))
@@ -575,7 +603,9 @@ def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth):
     return north_smooth, vertical_smooth, east_smooth
 
 
-def hv_ratio(amp_north, amp_vertical, amp_east):
+def hv_ratio(amp_north, amp_vertical, amp_east, freq, fmin=0.1, fmax=10):
+    # TODO: cortar los vectores a fmin y fmax
+    # 
     """Calculates the H/V spectral ratio
 
     Args
@@ -587,7 +617,26 @@ def hv_ratio(amp_north, amp_vertical, amp_east):
     Returns
     -------
         tuple: tuple containing the H/V mean ratio and the H/V for each window
+    
+    Changelog
+    ---------
+        - 09/SEP/23:\n
+            --> Added freq in the return variables for use in the plot function, as it's already cropped to the desired shape
+
     """
+
+        # Encuentra el índice del elemento más cercano a fmin y fmax
+    fmin_loc = np.abs(freq-fmin)
+    fmin_loc = np.argmin(fmin_loc)
+    fmax_loc = np.abs(freq-fmax)
+    fmax_loc = np.argmin(fmax_loc)
+
+    # # Corta el vector de frecuencias desde fmin hasta fmax
+    freq = np.array(freq[fmin_loc:fmax_loc])
+    amp_north = np.array(np.split(amp_north, [fmin_loc, fmax_loc], axis=-1)[1])
+    amp_vertical = np.array(np.split(amp_vertical, [fmin_loc, fmax_loc], axis=-1)[1])
+    amp_east = np.array(np.split(amp_east, [fmin_loc, fmax_loc], axis=-1)[1])
+
     amp_horizontal = []
     for n, e in zip(amp_north, amp_east):
         if isinstance(n, float) == True and isinstance(e, float) == True:
@@ -609,12 +658,55 @@ def hv_ratio(amp_north, amp_vertical, amp_east):
         quit()
 
     if HV.ndim != 1:
-        HV_mean = list(np.mean(HV, axis=0))
+        HV_mean = np.mean(HV, axis=0)
     else:
         HV_mean = HV
 
+    return HV_mean, HV, freq
 
-    return HV_mean, HV
+
+def plot_hv(HV_mean, HV, freq, fmin, fmax, name, plot_windows=True):
+    """
+    Changelog:
+    ---------
+        - 09/SEP/23:\n
+            --> Changed xmin, xmax to fmin, fmax
+    """
+
+    maxval = np.nanargmax(HV_mean)
+
+    if os.path.basename(name).endswith('.txt') or '.' not in os.path.basename(name):
+        nombre = os.path.basename(name)[:4]
+    else:
+        nombre = os.path.basename(name.split(".")[0])
+
+    if plot_windows==True:
+        for count, i in enumerate(HV):
+            # for i, count in zip(HV, range(len(HV))):
+            plt.semilogx(freq, i, label=f'Ventana {count+1}', lw=0.5)
+
+    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)*1.5,
+               colors='#808080', linewidths=20, alpha=0.5)
+    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)
+               * 1.5, colors='#363636', linewidths=1)
+
+    plt.semilogx(freq, HV_mean, color='r')
+
+    plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
+    plt.ylabel('H/V', fontsize=12, labelpad=10)
+    plt.xlim(fmin, fmax)
+    plt.ylim(0, np.nanmax(HV_mean)*1.25)
+    plt.title(f'{nombre} - H/V', fontsize=15)
+    plt.grid(ls='--', which='both')
+    plt.tick_params('both', labelsize=12)
+    # plt.legend()
+
+    # plt.savefig(f'{name[:-4]}-HV.png', dpi=400)
+    # plt.show()
+
+    fig = plt.gcf()
+    return fig
+
 
 def save_results(HV_mean, fftnorth, fftvertical, ffteast, freq, name, which='both'):
     """
@@ -667,47 +759,4 @@ def save_results(HV_mean, fftnorth, fftvertical, ffteast, freq, name, which='bot
                 file.write(str(i) + '\t' + str(f) + '\t' + str(hv) + '\n')
         # print('\nArchivo guardado!')
 
-
-    
-        
-
-
-def plot_hv(HV_mean, HV, freq, xmin, xmax, name, plot_windows=True):
-    # xmin = float(input('Frecuencia minima de la gráfica: '))
-    # xmax = float(input('Frecuencia máxima de la gráfica: '))
-    # xmin = 0.1
-    # xmax = 10
-    maxval = np.nanargmax(HV_mean)
-
-    if os.path.basename(name).endswith('.txt') or '.' not in os.path.basename(name):
-        nombre = os.path.basename(name)[:4]
-    else:
-        nombre = os.path.basename(name.split(".")[0])
-
-    if plot_windows==True:
-        for count, i in enumerate(HV):
-            # for i, count in zip(HV, range(len(HV))):
-            plt.semilogx(freq, i, label=f'Ventana {count+1}', lw=0.5)
-
-    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)*1.5,
-               colors='#808080', linewidths=20, alpha=0.5)
-    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)
-               * 1.5, colors='#363636', linewidths=1)
-
-    plt.semilogx(freq, HV_mean, color='r')
-
-    plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
-    plt.ylabel('H/V', fontsize=12, labelpad=10)
-    plt.xlim(xmin, xmax)
-    plt.ylim(0, np.nanmax(HV_mean)*1.25)
-    plt.title(f'{nombre} - H/V', fontsize=15)
-    plt.grid(ls='--', which='both')
-    plt.tick_params('both', labelsize=12)
-    # plt.legend()
-
-    # plt.savefig(f'{name[:-4]}-HV.png', dpi=400)
-    # plt.show()
-
-    fig = plt.gcf()
-    return fig
 
