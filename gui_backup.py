@@ -176,9 +176,12 @@ class SpectralAnalysisApp(QWidget):
         self.display_signal()
 
     def display_signal(self):
-        north = self.data[0]
-        vertical = self.data[1]
-        east = self.data[2]
+        try:
+            north = self.data[0]
+            vertical = self.data[1]
+            east = self.data[2]
+        except TypeError:
+            print('select a valid file')
 
         def plot_signal():
             dt = 1 / float(self.fs)
@@ -484,16 +487,25 @@ class SpectralAnalysisApp(QWidget):
         except AttributeError as e:
             print(e)
 
+
     def display_fft(self):
+        """
+            Changelog:
+            --------- 
+            - 09/SEP/23: \n
+            Changed xmin, xmax to fmin, fmax. \n
+            Moved fmin,fmax to the top in order to access them wherever in the function.\n
+            Added fmin, fmax parameters to the pr.rhs_spectrum() in order to account for the changes made to said function.
+            """
         # plot the FFT in the canvas
+        self.fmin = self.fft_minval_spinbox.value()
+        self.fmax = self.fft_maxval_spinbox.value()
 
         def plot(north, vertical, east):
             # plot FFT function just for the sake of saving space
             self.north, self.vertical, self.east = pr.konnoohmachi_smoothing(north, vertical, east, self.freq, self.smooth_constant)
-            xmin = self.fft_minval_spinbox.value()
-            xmax = self.fft_maxval_spinbox.value()
             figure = plt.clf()
-            figure = pr.plot_fft(self.north, self.vertical, self.east, self.freq, self.file_path, xmin, xmax)
+            figure = pr.plot_fft(self.north, self.vertical, self.east, self.freq, self.file_path, self.fmin, self.fmax)
             canvas = FigureCanvas(figure)
             toolbar = NavigationToolbar(canvas)
 
@@ -513,10 +525,10 @@ class SpectralAnalysisApp(QWidget):
 
         if self.taper_checkbox.isChecked():
             north, vertical, east, _ = pr.taper(self.data_split[0], self.data_split[1], self.data_split[2], self.selected_taper)
-            north, vertical, east, self.freq = pr.rhs_spectrum(self.data_split[0], self.data_split[1], self.data_split[2], 1/self.fs)
+            north, vertical, east, self.freq = pr.rhs_spectrum(self.data_split[0], self.data_split[1], self.data_split[2], 1/self.fs, self.fmin, self.fmax)
             plot(north, vertical, east)
         else:
-            north, vertical, east, self.freq = pr.rhs_spectrum(self.data_split[0], self.data_split[1], self.data_split[2], 1/self.fs)
+            north, vertical, east, self.freq = pr.rhs_spectrum(self.data_split[0], self.data_split[1], self.data_split[2], 1/self.fs, self.fmin, self.fmax)
             plot(north, vertical, east)   
 
     def hv_layout(self, tab):
@@ -603,15 +615,22 @@ class SpectralAnalysisApp(QWidget):
 
 
     def display_hv(self):
+        """
+        Changelog
+        ---------
+        09/SEP/23:\n
+            --> Added freq, fmin and fmax parameters to pr.hv_ratio()\n
+            --> Added hv_freq as a variable for the pr.hv_ratio(), as it is required for the pr.plot_hv() function
+        """
         # plot the hv in the canvas
-        self.hv_mean, hv_windows = pr.hv_ratio(self.north, self.vertical, self.east)
-        xmin = self.hv_minval_spinbox.value()
-        xmax = self.hv_maxval_spinbox.value()
+        fmin = self.hv_minval_spinbox.value()
+        fmax = self.hv_maxval_spinbox.value()
+        self.hv_mean, hv_windows, hv_freq = pr.hv_ratio(self.north, self.vertical, self.east, self.freq, fmin, fmax)
         figure = plt.clf()
         if self.hv_windows_checkbox.isChecked():
-            figure = pr.plot_hv(self.hv_mean, hv_windows, self.freq, xmin, xmax, self.file_path, plot_windows=True)
+            figure = pr.plot_hv(self.hv_mean, hv_windows, hv_freq, fmin, fmax, self.file_path, plot_windows=True)
         else:
-            figure = pr.plot_hv(self.hv_mean, hv_windows, self.freq, xmin, xmax, self.file_path, plot_windows=False)
+            figure = pr.plot_hv(self.hv_mean, hv_windows, hv_freq, fmin, fmax, self.file_path, plot_windows=False)
         
         canvas = FigureCanvas(figure)
         toolbar = NavigationToolbar(canvas)
