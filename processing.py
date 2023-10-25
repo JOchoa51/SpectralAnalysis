@@ -354,7 +354,7 @@ def window(window_length: float, data, fs: float, taper=True):
         vertical[vi] = vertical[vi][:dimmin]
 
 
-    if taper:
+    if not taper:
         return north, vertical, east
     else:
         window = windows.cosine(len(north))
