@@ -1,14 +1,19 @@
 # matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+# plt.rcParams['figure.dpi'] = 400
+# plt.rcParams['figure.figsize'] = [10,10]
 from matplotlib.patches import Rectangle
+
 import numpy as np
 from scipy.fft import rfft, rfftfreq
 from scipy.signal import detrend
 from scipy.signal import windows
+
 from obspy.signal.util import smooth
 from obspy import read
 from time import perf_counter
 import pykooh  # https://github.com/arkottke/pykooh
+
 import os
 import datetime
 import colorsys
@@ -18,9 +23,17 @@ import traceback
 # Removed because caused problems when using the API
 # plt.style.use(["science", "notebook", "grid"])
 
+# TODO:
+# Add anti-triggering function
+# Add rotate function
+# Select windows with at-least method
+# Select windows options "from" and "to"
+# Add filtering function
+# Add rotated H/V
+# Horizontal particle motion
 
 def read_sac(name, name2, name3: str):
-    """Read MSEED files using the ´read´ function of OpsPy
+    """Read MSEED files using the ´read´ function of ObsPy
 
     Args
     ----
@@ -83,18 +96,19 @@ def read_mseed(name: str):
     return N, V, E
 
 
-def read_file(name: str):
+def read_file(name: str, skiprows: int):
     """Read data from ASCII file, i.e. TXT files
 
     Args
     ----
-        name (str): Route of the file
+        name (str): file path
+        skiprows (float): row to skip when reading, starting from 0.
 
     Returns
     -------
         tuple: A tuple of north, vertical and east components
     """
-    N, V, E = np.loadtxt(name).transpose()
+    N, V, E = np.loadtxt(name, skiprows=skiprows, unpack=True)
     N = detrend(np.array(N)) - np.mean(N)
     V = detrend(np.array(V)) - np.mean(V)
     E = detrend(np.array(E)) - np.mean(E)
@@ -102,7 +116,8 @@ def read_file(name: str):
     return N, V, E
 
 
-def read_cires(name: str):
+def read_cires(name: str, header=False):
+    # BUG: UnboundLocalError: cannot access local variable 'north' where it is not associated with a value
     """Function specifically designed to read data from accelerograms of CIRES
 
     Args
@@ -114,6 +129,7 @@ def read_cires(name: str):
         tuple: A tuple of north, vertical and east components
     """
     try:
+        # if header:
         with open(name, "r") as f:
             north = []
             vertical = []
@@ -151,8 +167,16 @@ def read_cires(name: str):
                         elif len(s) == 2:
                             vertical.append(float(s[0]))
                             east.append(-float(s[1]))
-    except Exception as e:
-        print(e)
+    
+        # else:
+        #     header = None
+        #     north, vertical, east = np.loadtxt(name, skiprows=109, unpack=True)
+
+    except FileNotFoundError as fnf:
+        print('file not found')
+    except ValueError as ve:
+        print('Error in the values')
+
     north = detrend(np.array(north))
     vertical = detrend(np.array(vertical))
     east = detrend(np.array(east))
@@ -205,7 +229,9 @@ def plot_signal(north, vertical, east, dt, name):
     time = np.arange(0, n*dt, dt)
     time = time[-min_dim:]
 
-    maxvalue = np.max(np.maximum(np.abs(north), np.abs(east)))*1.2
+    maxvalue = np.maximum(np.abs(north), np.abs(east))
+    maxvalue = np.maximum(maxvalue, np.abs(vertical))
+    maxvalue = np.max(maxvalue)*1.2
     # minvalue = np.min(np.minimum(north, east))*1.2
     minvalue = -maxvalue
 
@@ -218,7 +244,7 @@ def plot_signal(north, vertical, east, dt, name):
     # ax.set_title('North', fontsize=12)
     ax.set_ylim(minvalue, maxvalue)
     ax.set_ylabel(f'{nombre} N', rotation=0, labelpad=30)
-    ax.set_yticks([])
+    # ax.set_yticks([])
 
     ax = axes[1]
     ax.plot(time, vertical, lw=0.5, color='k')
@@ -226,7 +252,7 @@ def plot_signal(north, vertical, east, dt, name):
     # ax.set_title('Vertical', fontsize=12)
     ax.set_ylim(minvalue, maxvalue)
     ax.set_ylabel(f'{nombre} Z', rotation=0, labelpad=30)
-    ax.set_yticks([])
+    # ax.set_yticks([])
 
     ax = axes[2]
     ax.plot(time, east, lw=0.5, color='k')
@@ -234,7 +260,7 @@ def plot_signal(north, vertical, east, dt, name):
     # ax.set_title('East', fontsize=12)
     ax.set_ylim(minvalue, maxvalue)
     ax.set_ylabel(f'{nombre} E', rotation=0, labelpad=30)
-    ax.set_yticks([])
+    # ax.set_yticks([])
 
     fig.supxlabel('Time [s]', fontsize=12)
     plt.tick_params('x', labelsize=12)
@@ -246,26 +272,11 @@ def plot_signal(north, vertical, east, dt, name):
     return fig
 
 
-def crop_signal(north, vertical, east):
-
-    # Cálculo de la dimensión menor de las señales
-    # Utilidad opcional.
-    dimmin = np.min([[len(no) for no in north] +
-                    [len(e) for e in east] +
-                    [len(v) for v in vertical]])
-
-    # Corte de las señales a la menor dimensión encontrada
-    for ni, ei, vi in zip(range(len(north)), range(len(east)), range(len(vertical))):
-        north[ni] = north[ni][:dimmin]
-        east[ei] = east[ei][:dimmin]
-        vertical[vi] = vertical[vi][:dimmin]
-
-    return north, vertical, east
-
-
 def taper(north, vertical, east, type):
 
     """Taper the signal as to avoid continuity problems with FFT
+
+    :warning: **Not longer in use**, will be removed
 
     Args:
     ----
@@ -276,6 +287,12 @@ def taper(north, vertical, east, type):
 
     Returns:
         tuple: North, vertical and east components tapered. Also includes the window vector
+
+    Changelog:
+        - 10/OCT/23:\n
+            --> Added removal warning
+
+    
     """
     north = np.array(north)
     vertical = np.array(vertical)
@@ -294,17 +311,26 @@ def taper(north, vertical, east, type):
     return north, vertical, east, w
 
 
-def window(window_length: float, data, fs: float):
+def window(window_length: float, data, fs: float, taper=True):
     """Split the signal into the given number of sections
 
     Args:
     ----
         sections (float): Length of analysis window in seconds
         data (ndarray): Signal data to be split into sections
+        fs (float): Sampling frequency
+        taper (bool): Whether to apply tapering or not. Defaults to True.
 
     Returns:
     -------
-        tuple: Tuple of north, vertical and east components, each one with the specified number of sections
+        tuple: Tuple of north, vertical, east and window number
+    
+    Changelog:
+    ---------
+        - 13/SEP/2023:\n
+            --> Added cropping function to keep equal dimensions
+        - 10/OCT/2023:\n
+            --> Added tapering function by default
     """
     N = len(data[0])
     section_length = window_length * fs  # número de muestras por sección
@@ -315,7 +341,57 @@ def window(window_length: float, data, fs: float):
     vertical = np.array_split(data[1], window_number)
     east = np.array_split(data[2], window_number)
 
-    return [north, vertical, east], window_number
+    # Corte de los vectores para que tengan dimesiones consistentes
+
+    dimmin = np.min([[len(no) for no in north] +
+                    [len(e) for e in east] +
+                    [len(v) for v in vertical]])
+
+    # Corte de las señales a la menor dimensión encontrada
+    for ni, ei, vi in zip(range(len(north)), range(len(east)), range(len(vertical))):
+        north[ni] = north[ni][:dimmin]
+        east[ei] = east[ei][:dimmin]
+        vertical[vi] = vertical[vi][:dimmin]
+
+
+    if taper:
+        return north, vertical, east
+    else:
+        window = windows.cosine(len(north))
+        return north*window, vertical*window, east*window
+
+def crop_signal(north, vertical, east):
+    """Crop signal to keep equal dimensions
+
+    Args:
+    -----
+        north (ndarray): north array
+        vertical (ndarray): vertical array
+        east (ndarray): east array
+
+    Returns:
+    -------
+        tuple: north, vertical, east with the same dimension
+
+    Notes:
+    -----
+        # TODO: remove deprecated function
+        Will be removed in future versions
+    """    
+
+    # Cálculo de la dimensión menor de las señales
+    # Utilidad opcional.
+    dimmin = np.min([[len(no) for no in north] +
+                    [len(e) for e in east] +
+                    [len(v) for v in vertical]])
+
+    # Corte de las señales a la menor dimensión encontrada
+    for ni, ei, vi in zip(range(len(north)), range(len(east)), range(len(vertical))):
+        north[ni] = north[ni][:dimmin]
+        east[ei] = east[ei][:dimmin]
+        vertical[vi] = vertical[vi][:dimmin]
+
+    return north, vertical, east
 
 
 def plot_windows(data, window_length, dt, name):
@@ -419,7 +495,7 @@ def plot_windows(data, window_length, dt, name):
     return fig
 
 
-def plot_signal_windowed(north, vertical, east, dt, name, window_type='cosine'):
+def plot_signal_windows(north, vertical, east, dt, name, window_type='cosine'):
     """Plot each individual analysis window
 
     Args:
@@ -484,7 +560,7 @@ def plot_signal_windowed(north, vertical, east, dt, name, window_type='cosine'):
     return fig
 
 
-def rhs_spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
+def spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
     """Calculates the right-hand-side amplitude spectrum of the signal
 
     Args
@@ -507,8 +583,19 @@ def rhs_spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
             --> Added code to crop the FFT and frequency arrays to the specified fmin and fmax
         - 11/SEP/2023: \n
             --> Added a loop to check whether the cutoff frequencies are inside the right interval
+        - 25/SEP/2023:\n
+            --> Changed the output type to numpy arrays. Now there are two outputs, one with the FFT data and another with the frequency array
+        - 25/OCT/2023:\n
+            --> Changed function name from `rhs_spectrum` to `spectrum`
     """
-    N = len(north[0])  # longitud de cada seccion
+    north = np.array(north)
+    vertical = np.array(vertical)
+    east = np.array(east)
+
+    if north.ndim == 1:
+        N = len(north)
+    else:
+        N = len(north[0])  # longitud de cada seccion
     freq = rfftfreq(N, dt)
 
     # Encuentra el índice del elemento más cercano a fmin y fmax
@@ -527,9 +614,23 @@ def rhs_spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
         fmax_loc -= 1
 
     # Cálculo y normalización de los espectros de Fourier
-    fftnorth = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=north)
-    fftvertical = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=vertical)
-    ffteast = np.apply_along_axis(lambda t: np.abs(rfft(t)/(N/2)), axis=-1, arr=east)
+    if north.ndim != 1 and vertical.ndim != 1 and east.ndim != 1:
+        fftnorth = np.apply_along_axis(
+            func1d=lambda t: np.abs(rfft(t)/(N/2)), 
+            axis=-1, 
+            arr=north)
+        fftvertical = np.apply_along_axis(
+            func1d=lambda t: np.abs(rfft(t)/(N/2)), 
+            axis=-1, 
+            arr=vertical)
+        ffteast = np.apply_along_axis(
+            func1d=lambda t: np.abs(rfft(t)/(N/2)), 
+            axis=-1, 
+            arr=east)
+    else:
+        fftnorth = np.abs(rfft(north)/(N/2))
+        fftvertical = np.abs(rfft(vertical)/(N/2))
+        ffteast = np.abs(rfft(east)/(N/2))
 
     # Corta el vector de frecuencias desde fmin hasta fmax
     freq = freq[fmin_loc:fmax_loc]
@@ -551,7 +652,7 @@ def rhs_spectrum(north, vertical, east, dt, fmin=0.1, fmax=50):
             axis=-1)[1])
 
 
-    return fftnorth, fftvertical, ffteast, freq
+    return np.array([fftnorth, fftvertical, ffteast]), np.array(freq)
 
 
 def plot_fft(north, vertical, east, freq, name: str, fmin: float, fmax: float):
@@ -571,13 +672,21 @@ def plot_fft(north, vertical, east, freq, name: str, fmin: float, fmax: float):
         --> Corte del vector de frecuencias a los límites establecidos\n
         --> Corte de los vectores de datos a los límites establecidos
     - 09/SEP/2023: \n
-        --> Removed the vector cropping function and moved it to the rhs_spectrum one
+        --> Removed the vector cropping function and moved it to the spectrum one
     """
 
     # Calcula el promedio de las ventanas
-    n_mean = np.mean(north, axis=0)
-    v_mean = np.mean(vertical, axis=0)
-    e_mean = np.mean(east, axis=0)
+    north = np.array(north)
+    vertical = np.array(vertical)
+    east = np.array(east)
+    if north.ndim != 1 and vertical.ndim != 1 and east.ndim != 1:
+        n_mean = np.mean(north, axis=0)
+        v_mean = np.mean(vertical, axis=0)
+        e_mean = np.mean(east, axis=0)
+    else:
+        n_mean = north
+        v_mean = vertical
+        e_mean = east
 
     nombre = os.path.basename(name)[:4]
 
@@ -588,7 +697,7 @@ def plot_fft(north, vertical, east, freq, name: str, fmin: float, fmax: float):
     
     plt.title(f'{nombre} - FFT', fontsize=15)
     plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
-    plt.ylabel('Power Spectral Density [(counts)^2/Hz]', fontsize=12, labelpad=10)
+    plt.ylabel('Amplitude', fontsize=12, labelpad=10)
     plt.xlim(fmin, fmax)
     plt.grid(ls='--', which='both')
     plt.legend()
@@ -633,7 +742,7 @@ def standard_smoothing(fftnorth, fftvertical, ffteast, smoothie):
     return amp_north, amp_vertical, amp_east
 
 
-def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth):
+def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth=40):
     """Smooths the data using Konno-Ohmachi (1998) algorithm
 
     Args
@@ -650,6 +759,7 @@ def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth):
 
     Notes
     -----
+        # TODO:
         Maybe will be removed in future versions
     """
     north_smooth = []
@@ -676,50 +786,36 @@ def konnoohmachi_smoothing(fftnorth, fftvertical, ffteast, freq, bandwidth):
     return north_smooth, vertical_smooth, east_smooth
 
 
-def konnoohmachi_smoothing_opt(fftnorth, fftvertical, ffteast, freq, bandwidth):
+def konnoohmachi_smoothing_opt(data, freq, bandwidth=40, axis=-1):
     """Smooths the data using Konno-Ohmachi (1998) algorithm.\n
     Optimized version with numpy vectorization and cython for smoothing.\n
     Up to 2x faster than normal version when already allocated in memory
 
     Args
     ----
-        - fftnorth (ndarray): North-component amplitude spectrum
-        - fftvertical (ndarray): Vertical-component amplitude spectrum
-        - ffteast (ndarray): East-component amplitude spectrum
+        - data (ndarray): Data vector to be smoothed
         - freq (ndarray): Frequency vector
-        - bandwidth (int): Strength of the filter. A lower bandwidth is a stronger smoothing.
+        - bandwidth (int): Strength of the filter. A lower bandwidth is a stronger smoothing. Defaults to 40.
+        - axis (int): Axis along which the data will be smoothed. Defaults to -1
 
     Returns
     -------
-        - tuple: smoothed spectrum
+        - ndarray: smoothed data
     
     Changelog
     ---------
     - 10/SEP/23:\n
         --> Added the function
+    - 24/SEP/23:\n
+        --> Added support for arrays of any dimension
     """
-    s = perf_counter()
 
-    north_smooth = np.apply_along_axis(
+    data_smooth = np.apply_along_axis(
                     func1d=lambda t: pykooh.smooth(freq, freq, t, b=bandwidth, use_cython=True), 
-                    arr=fftnorth, 
-                    axis=-1
-                    )
-    vertical_smooth = np.apply_along_axis(
-                    func1d=lambda t: pykooh.smooth(freq, freq, t, b=bandwidth, use_cython=True), 
-                    arr=fftvertical, 
-                    axis=-1
-                    )
-    east_smooth = np.apply_along_axis(
-                    func1d=lambda t: pykooh.smooth(freq, freq, t, b=bandwidth, use_cython=True), 
-                    arr=ffteast, 
-                    axis=-1
-                    )
-    
-    e = perf_counter()
-    # print(f'{round(e-s, 4)} s transcurridos')
-
-    return north_smooth, vertical_smooth, east_smooth
+                    arr=data, 
+                    axis=axis
+                )
+    return data_smooth
 
 
 def konnoohmachi_matlab(signal, freq_array, smooth_coeff):
@@ -752,8 +848,6 @@ def konnoohmachi_matlab(signal, freq_array, smooth_coeff):
 
 
 def hv_ratio(amp_north, amp_vertical, amp_east, freq, fmin=0.1, fmax=10):
-    # TODO: cortar los vectores a fmin y fmax
-    # 
     """Calculates the H/V spectral ratio
 
     Args
@@ -805,7 +899,8 @@ def hv_ratio(amp_north, amp_vertical, amp_east, freq, fmin=0.1, fmax=10):
                  axis=-1)[1])
     amp_east = np.array(
         np.split(ary=amp_east, 
-                 indices_or_sections=[fmin_loc, fmax_loc], axis=-1)[1])
+                 indices_or_sections=[fmin_loc, fmax_loc], 
+                 axis=-1)[1])
 
     amp_horizontal = []
     for n, e in zip(amp_north, amp_east):
@@ -835,7 +930,7 @@ def hv_ratio(amp_north, amp_vertical, amp_east, freq, fmin=0.1, fmax=10):
     return HV_mean, HV, freq
 
 
-def plot_hv(HV_mean, HV, freq, fmin, fmax, name, plot_windows=True):
+def plot_hv(HV_mean, HV, freq, fmin, fmax, name=None, plot_windows=True, period_or_freq='freq'):
     """Generates a plot for the HV Spectral Ratio, indicating all the analysis windows and the position of the maximum amplitude 
 
     Args:
@@ -847,6 +942,7 @@ def plot_hv(HV_mean, HV, freq, fmin, fmax, name, plot_windows=True):
         - fmax (float): Maximum frequency for the plot
         - name (str): Name of the analyzed seismic station or path of the original analyzed file. Title of the plot.
         - plot_windows (bool, optional): Whether to show all the analysis windows or not. If False, only the mean value is visible. Defaults to True.
+        - period_or_freq (str, optional): Whether to plot HVSR against period or frequency. Defaults to 'freq'.
 
     Returns:
     -------
@@ -857,40 +953,66 @@ def plot_hv(HV_mean, HV, freq, fmin, fmax, name, plot_windows=True):
         - 09/SEP/23:\n
             --> Changed xmin, xmax to fmin, fmax
             --> Added textbox to the upper right corner to indicate frequency and amplitude
+        - 14/SEP/23:\n
+            --> Added the option to plot against frequency or period
     """    
 
     maxval = np.nanargmax(HV_mean)
 
-    if os.path.basename(name).endswith('.txt') or '.' not in os.path.basename(name):
-        nombre = os.path.basename(name)[:4]
-    elif name is None:
+    if name is None:
+        nombre = ''
+    elif name is not None:
         nombre = name
+    elif os.path.basename(name).endswith('.txt') or '.' not in os.path.basename(name):
+        nombre = os.path.basename(name)[:4]
     else:
         nombre = os.path.basename(name.split(".")[0])
 
-
-    if plot_windows==True:
-        for count, i in enumerate(HV):
-            # for i, count in zip(HV, range(len(HV))):
-            plt.semilogx(freq, i, label=f'Ventana {count+1}', lw=0.5)
-
-    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)*1.5,
-               colors='#808080', linewidths=20, alpha=0.5)
-    plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)
-               * 1.5, colors='#363636', linewidths=1)
-
-    plt.semilogx(freq, HV_mean, color='r')
-
-    xtext = round(freq[maxval], 4)
     ytext = round(np.nanmax(HV_mean), 4)
-    plt.text(x=0.95, y=0.95, s=f'f = {xtext} Hz \n Amp = {ytext}', bbox=dict(facecolor='white', edgecolor='black', pad=5.0), transform=plt.gca().transAxes, ha='right', va='top')
 
-    plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
+    if period_or_freq == 'period':
+        period = 1/freq
+
+        if plot_windows==True and HV.ndim != 1:
+            for count, i in enumerate(HV):
+                # for i, count in zip(HV, range(len(HV))):
+                plt.semilogx(period, i, label=f'Ventana {count+1}', lw=0.5, zorder=10)
+
+        # period_mean = 1/HV_mean
+        # plt.vlines(period[maxval], 0, np.nanmax(HV_mean)*1.5,
+        #         colors='#808080', linewidths=20, alpha=0.5, zorder=5)
+        # plt.vlines(period[maxval], 0, np.nanmax(HV_mean)
+        #         * 1.5, colors='#363636', linewidths=1, zorder=5)
+        plt.semilogx(period, HV_mean, color='r', zorder=10)
+
+        xtext = round(period[maxval], 4)
+        xtext_coord = 0.275
+        plot_text = f'T = {xtext} s \n Amp = {ytext}'
+        plt.xlabel("Period [s]", fontsize=12, labelpad=10)
+    else:
+        if plot_windows==True and HV.ndim != 1:
+            for count, i in enumerate(HV):
+                # for i, count in zip(HV, range(len(HV))):
+                plt.semilogx(freq, i, label=f'Ventana {count+1}', lw=0.5, zorder=10)
+        # plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)*1.5,
+        #         colors='#808080', linewidths=20, alpha=0.5, zorder=5)
+        # plt.vlines(freq[maxval], 0, np.nanmax(HV_mean)
+        #         * 1.5, colors='#363636', linewidths=1, zorder=5)
+        plt.semilogx(freq, HV_mean, color='r', zorder=10)
+
+        xtext = round(freq[maxval], 4)
+        xtext_coord = 0.95
+        plot_text = f'f = {xtext} Hz \n Amp = {ytext}'
+        plt.xlabel("Frequency [Hz]", fontsize=12, labelpad=10)
+
+
+    plt.text(x=xtext_coord, y=0.95, s=plot_text, bbox=dict(facecolor='white', edgecolor='black', pad=5.0), transform=plt.gca().transAxes, ha='right', va='top')
+
     plt.ylabel('H/V', fontsize=12, labelpad=10)
     plt.xlim(fmin, fmax)
     plt.ylim(0, np.nanmax(HV_mean)*1.25)
     plt.title(f'{nombre} - H/V', fontsize=15)
-    plt.grid(ls='--', which='both')
+    plt.grid(ls='--', which='both', zorder=0)
     plt.tick_params('both', labelsize=12)
     # plt.legend()
 
@@ -955,8 +1077,8 @@ def save_results(HV_mean, fftnorth, fftvertical, ffteast, freq, name, which='bot
         # print('\nArchivo guardado!')
 
 
-def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmin, hvmax):
-    """Calculates H/V Spectral Ratio from acceleration data, either from variable or file.
+def process_hvsr(data, dt, win_len, taper_win, smooth_coeff, fftmin, fftmax, hvmin, hvmax):
+    """Calculates H/V Spectral Ratio from acceleration data, either from array or file.
 
 
     Args:
@@ -969,7 +1091,7 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
 
         - taper_win (str): Window type for taper. Valid windows are those in the scipy.signal.windows module, but only the ones that does not take any special parameters: {'barthann','bartlett','blackman','blackmanharris','bohman','boxcar','chebwin','cosine','exponential','flattop','hamming','hann','lanczos','nuttall','parzen','taylor','triang','tukey'}
 
-        - smooth_band (float): Smooth coefficient of the Konno-Ohmachi smoothing function.
+        - smooth_coeff (float): Smooth coefficient of the Konno-Ohmachi smoothing function.
         - fftmin (float): Minimum frequency for the FFT spectrum
         - fftmax (float): Maximum frequency for the FFT spectrum
         - hvmin (float): Minimum frequency for the H/V spectrum
@@ -986,15 +1108,15 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
     3. Crop signal so each window has the same length
     4. Taper signal
     5. Calculate FFT
-    6. Smooth spectra
+    6. Smooth spectrum
     7. Calculate H/V
     """
     fs = 1/dt
 
     # data_windowed returns a 3-element tuple (N, V, E) and window number
     # return [north, vertical, east], window_number
-    data_windowed, win_num = window(win_len, data, fs)
-    print('Data windowed')
+    data_windowed = window(win_len, data, fs)
+    # print('Data windowed')
 
     try:
         north = data_windowed[0]
@@ -1003,19 +1125,6 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
     except IndexError as ie:
         traceback.print_exc()
         print('Windowed array has more than 3 sub-arrays')
-
-    # data_cropped returns a 3-element tuple (N, V, E)
-    # return north, vertical, east
-    data_cropped = crop_signal(north, vertical, east)
-
-    try:
-        north = data_cropped[0]
-        vertical = data_cropped[1]
-        east = data_cropped[2]
-    except IndexError as ie:
-        traceback.print_exc()
-        print('Cropped array has more than 3 sub-arrays')
-    print('\nData cropped')
     
 
     # taper returns a 3-element tuple (N-tapered, V-tapered, E-tapered)
@@ -1028,27 +1137,26 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
     except IndexError as ie:
         traceback.print_exc()
         print('Tapered array has more than 3 sub-arrays')
-    print('\nData tapered')
+    # print('\nData tapered')
 
 
-    # rhs_spectrum returns a 4-element tuple (NFFT, VFFT, EFFT, Frequency)
+    # spectrum returns a 4-element tuple (NFFT, VFFT, EFFT, Frequency)
     # return fftnorth, fftvertical, ffteast, freq
-    data_fft = rhs_spectrum(north, vertical, east, dt, fmin=fftmin, fmax=fftmax)
+    data_fft, freq = spectrum(north, vertical, east, dt, fmin=fftmin, fmax=fftmax)
 
     try:
-        freq = data_fft[-1]
         north = data_fft[0]
         vertical = data_fft[1]
         east = data_fft[2]
     except IndexError as ie:
         traceback.print_exc()
         print('FFT array has more than 4 sub-arrays')
-    print('\nFFT done')
+    # print('\nFFT done')
 
 
-    # konnoohmachi_smoothing_opt returns a 3-element tuple (N-smooth, V-smooth, E-smooth)
-    print('\nSmoothing... this may take a while')
-    data_smoothed = konnoohmachi_smoothing_opt(north, vertical, east, freq, smooth_band)
+    # konnoohmachi_smoothing_opt returns one array with the smoothed data
+    print('Smoothing... this may take a while')
+    data_smoothed = konnoohmachi_smoothing_opt(data_fft, freq, smooth_coeff)
 
     try:
         north = data_smoothed[0]
@@ -1057,7 +1165,7 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
     except IndexError as ie:
         traceback.print_exc()
         print('Smoothed array has more than 3 sub-arrays')
-    print('\nSmoothing done')
+    print('Smoothing done')
 
 
     # HV returns a 3-element tuple (HV mean, HV, Frequency)
@@ -1071,19 +1179,19 @@ def process_hvsr(data, dt, win_len, taper_win, smooth_band, fftmin, fftmax, hvmi
     except IndexError as ie:
         traceback.print_exc()
         print('HV array has more than 3 sub-arrays')
-    print('\n Spectral ratio calculated!')
+    print('Spectral ratio calculated!')
 
 
     return HV_mean, HV, freq
 
-def hvsr(acc_data, file_type, dt, win_len, taper_window='cosine', smooth_bandwidth=40.0, fftmin=0.1, fftmax=50.0, hvmin=0.1, hvmax=10.0):
-    """Calculates H/V Spectral Ratio given the acceleration data wiht north, east and vertical components
+def hvsr(acc_data, dt: float, win_len: float, file_type=None, taper_window='cosine', smooth_bandwidth=40.0, fftmin=0.1, fftmax=50.0, hvmin=0.1, hvmax=10.0):
+    """Calculates H/V Spectral Ratio given the acceleration data with north, east and vertical components
 
     Args:
     -----
         - acc_data (ndarray, str): Path of the file that contains the data (str) or variable with data (NDArray)
 
-        - file_type (str): File type. Valid options are {'cires','ascii','mseed','miniseed','sac'}
+        - file_type (str, optional): File type. Valid options are {'cires','ascii','mseed','miniseed','sac'}. Defaults to None.
 
         - dt (float): Sampling period of the signal
 
@@ -1104,13 +1212,14 @@ def hvsr(acc_data, file_type, dt, win_len, taper_window='cosine', smooth_bandwid
     """    
 
     
-    if isinstance(acc_data, str):
+    # if isinstance(acc_data, str):
+    if file_type is not None:
         # checks if acc_data is path-like
         try:
             if file_type.lower() == 'cires':
                 data = read_cires(acc_data)
             elif file_type.lower() == 'ascii':
-                data = read_file(acc_data)
+                data = read_file(acc_data, skiprows=0)
             elif file_type.lower() == 'mseed' or file_type.lower() == 'miniseed':
                 data = read_mseed(acc_data)
             elif file_type.lower() == 'sac':
@@ -1118,9 +1227,9 @@ def hvsr(acc_data, file_type, dt, win_len, taper_window='cosine', smooth_bandwid
         except FileNotFoundError as fnf:
             traceback.print_exc()
 
-        hvmean, hv, freq = process_hvsr(data=data, dt=dt, win_len=win_len, taper_win=taper_window, smooth_band=smooth_bandwidth, fftmin=fftmin, fftmax=fftmax, hvmin=hvmin, hvmax=hvmax)
+        hvmean, hv, freq = process_hvsr(data=data, dt=dt, win_len=win_len, taper_win=taper_window, smooth_coeff=smooth_bandwidth, fftmin=fftmin, fftmax=fftmax, hvmin=hvmin, hvmax=hvmax)
     else:
         # if acc_data is a variable (override reading the file)
-        hvmean, hv, freq = process_hvsr(data=acc_data, dt=dt, win_len=win_len, taper_win=taper_window, smooth_band=smooth_bandwidth, fftmin=fftmin, fftmax=fftmax, hvmin=hvmin, hvmax=hvmax)
+        hvmean, hv, freq = process_hvsr(data=acc_data, dt=dt, win_len=win_len, taper_win=taper_window, smooth_coeff=smooth_bandwidth, fftmin=fftmin, fftmax=fftmax, hvmin=hvmin, hvmax=hvmax)
     
     return hvmean, hv, freq
